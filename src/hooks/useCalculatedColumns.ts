@@ -1,14 +1,24 @@
 import { useMemo } from 'react';
 
-import type { CalculatedColumn, Column, Maybe } from '../types';
-import type { DataGridProps } from '../DataGrid';
-import { valueFormatter, toggleGroupFormatter } from '../formatters';
-import { SELECT_COLUMN_KEY } from '../Columns';
 import { clampColumnWidth, max, min } from '../utils';
+import type { CalculatedColumn, CalculatedColumnParent, ColumnOrColumnGroup, Omit } from '../types';
+import { renderValue } from '../cellRenderers';
+import { SELECT_COLUMN_KEY } from '../Columns';
+import type { DataGridProps } from '../DataGrid';
+import defaultRenderHeaderCell from '../renderHeaderCell';
 
 type Mutable<T> = {
-  -readonly [P in keyof T]: T[P];
+  -readonly [P in keyof T]: T[P] extends ReadonlyArray<infer V> ? Mutable<V>[] : T[P];
 };
+
+interface WithParent<R, SR> {
+  readonly parent: MutableCalculatedColumnParent<R, SR> | undefined;
+}
+
+type MutableCalculatedColumnParent<R, SR> = Omit<Mutable<CalculatedColumnParent<R, SR>>, 'parent'> &
+  WithParent<R, SR>;
+type MutableCalculatedColumn<R, SR> = Omit<Mutable<CalculatedColumn<R, SR>>, 'parent'> &
+  WithParent<R, SR>;
 
 interface ColumnMetric {
   width: number;
@@ -16,93 +26,110 @@ interface ColumnMetric {
 }
 
 const DEFAULT_COLUMN_WIDTH = 'auto';
-const DEFAULT_COLUMN_MIN_WIDTH = 80;
+const DEFAULT_COLUMN_MIN_WIDTH = 50;
 
-interface CalculatedColumnsArgs<R, SR> extends Pick<DataGridProps<R, SR>, 'defaultColumnOptions'> {
-  rawColumns: readonly Column<R, SR>[];
-  rawGroupBy: Maybe<readonly string[]>;
+interface CalculatedColumnsArgs<R, SR> {
+  rawColumns: readonly ColumnOrColumnGroup<R, SR>[];
+  defaultColumnOptions: DataGridProps<R, SR>['defaultColumnOptions'];
   viewportWidth: number;
   scrollLeft: number;
-  columnWidths: ReadonlyMap<string, number>;
+  getColumnWidth: (column: CalculatedColumn<R, SR>) => string | number;
   enableVirtualization: boolean;
 }
 
 export function useCalculatedColumns<R, SR>({
   rawColumns,
-  columnWidths,
+  defaultColumnOptions,
+  getColumnWidth,
   viewportWidth,
   scrollLeft,
-  defaultColumnOptions,
-  rawGroupBy,
   enableVirtualization
 }: CalculatedColumnsArgs<R, SR>) {
   const defaultWidth = defaultColumnOptions?.width ?? DEFAULT_COLUMN_WIDTH;
   const defaultMinWidth = defaultColumnOptions?.minWidth ?? DEFAULT_COLUMN_MIN_WIDTH;
   const defaultMaxWidth = defaultColumnOptions?.maxWidth ?? undefined;
-  const defaultFormatter = defaultColumnOptions?.formatter ?? valueFormatter;
+  const defaultCellRenderer = defaultColumnOptions?.renderCell ?? renderValue;
+  const defaultHeaderCellRenderer =
+    defaultColumnOptions?.renderHeaderCell ?? defaultRenderHeaderCell;
   const defaultSortable = defaultColumnOptions?.sortable ?? false;
   const defaultResizable = defaultColumnOptions?.resizable ?? false;
+  const defaultDraggable = defaultColumnOptions?.draggable ?? false;
 
-  const { columns, colSpanColumns, lastFrozenColumnIndex, groupBy } = useMemo((): {
-    columns: readonly CalculatedColumn<R, SR>[];
-    colSpanColumns: readonly CalculatedColumn<R, SR>[];
-    lastFrozenColumnIndex: number;
-    groupBy: readonly string[];
+  const { columns, colSpanColumns, lastFrozenColumnIndex, headerRowsCount } = useMemo((): {
+    readonly columns: readonly CalculatedColumn<R, SR>[];
+    readonly colSpanColumns: readonly CalculatedColumn<R, SR>[];
+    readonly lastFrozenColumnIndex: number;
+    readonly headerRowsCount: number;
   } => {
-    // Filter rawGroupBy and ignore keys that do not match the columns prop
-    const groupBy: string[] = [];
     let lastFrozenColumnIndex = -1;
+    let headerRowsCount = 1;
+    const columns: MutableCalculatedColumn<R, SR>[] = [];
 
-    const columns = rawColumns.map((rawColumn) => {
-      const rowGroup = rawGroupBy?.includes(rawColumn.key) ?? false;
-      // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing
-      const frozen = rowGroup || rawColumn.frozen || false;
+    collectColumns(rawColumns, 1);
 
-      const column: Mutable<CalculatedColumn<R, SR>> = {
-        ...rawColumn,
-        idx: 0,
-        frozen,
-        isLastFrozenColumn: false,
-        rowGroup,
-        width: rawColumn.width ?? defaultWidth,
-        minWidth: rawColumn.minWidth ?? defaultMinWidth,
-        maxWidth: rawColumn.maxWidth ?? defaultMaxWidth,
-        sortable: rawColumn.sortable ?? defaultSortable,
-        resizable: rawColumn.resizable ?? defaultResizable,
-        formatter: rawColumn.formatter ?? defaultFormatter
-      };
+    function collectColumns(
+      rawColumns: readonly ColumnOrColumnGroup<R, SR>[],
+      level: number,
+      parent?: MutableCalculatedColumnParent<R, SR>
+    ) {
+      for (const rawColumn of rawColumns) {
+        if ('children' in rawColumn) {
+          const calculatedColumnParent: MutableCalculatedColumnParent<R, SR> = {
+            name: rawColumn.name,
+            parent,
+            idx: -1,
+            colSpan: 0,
+            level: 0,
+            headerCellClass: rawColumn.headerCellClass
+          };
 
-      if (rowGroup) {
-        column.groupFormatter ??= toggleGroupFormatter;
+          collectColumns(rawColumn.children, level + 1, calculatedColumnParent);
+          continue;
+        }
+
+        const frozen = rawColumn.frozen ?? false;
+
+        const column: MutableCalculatedColumn<R, SR> = {
+          ...rawColumn,
+          parent,
+          idx: 0,
+          level: 0,
+          frozen,
+          width: rawColumn.width ?? defaultWidth,
+          minWidth: rawColumn.minWidth ?? defaultMinWidth,
+          maxWidth: rawColumn.maxWidth ?? defaultMaxWidth,
+          sortable: rawColumn.sortable ?? defaultSortable,
+          resizable: rawColumn.resizable ?? defaultResizable,
+          draggable: rawColumn.draggable ?? defaultDraggable,
+          renderCell: rawColumn.renderCell ?? defaultCellRenderer,
+          renderHeaderCell: rawColumn.renderHeaderCell ?? defaultHeaderCellRenderer
+        };
+
+        columns.push(column);
+
+        if (frozen) {
+          lastFrozenColumnIndex++;
+        }
+
+        if (level > headerRowsCount) {
+          headerRowsCount = level;
+        }
       }
-
-      if (frozen) {
-        lastFrozenColumnIndex++;
-      }
-
-      return column;
-    });
+    }
 
     columns.sort(({ key: aKey, frozen: frozenA }, { key: bKey, frozen: frozenB }) => {
       // Sort select column first:
       if (aKey === SELECT_COLUMN_KEY) return -1;
       if (bKey === SELECT_COLUMN_KEY) return 1;
 
-      // Sort grouped columns second, following the groupBy order:
-      if (rawGroupBy?.includes(aKey)) {
-        if (rawGroupBy.includes(bKey)) {
-          return rawGroupBy.indexOf(aKey) - rawGroupBy.indexOf(bKey);
-        }
-        return -1;
-      }
-      if (rawGroupBy?.includes(bKey)) return 1;
-
-      // Sort frozen columns third:
+      // Sort frozen columns second:
       if (frozenA) {
         if (frozenB) return 0;
         return -1;
       }
       if (frozenB) return 1;
+
+      // TODO: sort columns to keep them grouped if they have a parent
 
       // Sort other columns last:
       return 0;
@@ -111,35 +138,29 @@ export function useCalculatedColumns<R, SR>({
     const colSpanColumns: CalculatedColumn<R, SR>[] = [];
     columns.forEach((column, idx) => {
       column.idx = idx;
-
-      if (column.rowGroup) {
-        groupBy.push(column.key);
-      }
+      updateColumnParent(column, idx, 0);
 
       if (column.colSpan != null) {
         colSpanColumns.push(column);
       }
     });
 
-    if (lastFrozenColumnIndex !== -1) {
-      columns[lastFrozenColumnIndex].isLastFrozenColumn = true;
-    }
-
     return {
       columns,
       colSpanColumns,
       lastFrozenColumnIndex,
-      groupBy
+      headerRowsCount
     };
   }, [
     rawColumns,
     defaultWidth,
     defaultMinWidth,
     defaultMaxWidth,
-    defaultFormatter,
+    defaultCellRenderer,
+    defaultHeaderCellRenderer,
     defaultResizable,
     defaultSortable,
-    rawGroupBy
+    defaultDraggable
   ]);
 
   const { templateColumns, layoutCssVars, totalFrozenColumnWidth, columnMetrics } = useMemo((): {
@@ -154,7 +175,8 @@ export function useCalculatedColumns<R, SR>({
     const templateColumns: string[] = [];
 
     for (const column of columns) {
-      let width = columnWidths.get(column.key) ?? column.width;
+      let width = getColumnWidth(column);
+
       if (typeof width === 'number') {
         width = clampColumnWidth(width, column);
       } else {
@@ -172,9 +194,7 @@ export function useCalculatedColumns<R, SR>({
       totalFrozenColumnWidth = columnMetric.left + columnMetric.width;
     }
 
-    const layoutCssVars: Record<string, string> = {
-      gridTemplateColumns: templateColumns.join(' ')
-    };
+    const layoutCssVars: Record<string, string> = {};
 
     for (let i = 0; i <= lastFrozenColumnIndex; i++) {
       const column = columns[i];
@@ -182,7 +202,7 @@ export function useCalculatedColumns<R, SR>({
     }
 
     return { templateColumns, layoutCssVars, totalFrozenColumnWidth, columnMetrics };
-  }, [columnWidths, columns, lastFrozenColumnIndex]);
+  }, [getColumnWidth, columns, lastFrozenColumnIndex]);
 
   const [colOverscanStartIdx, colOverscanEndIdx] = useMemo((): [number, number] => {
     if (!enableVirtualization) {
@@ -245,9 +265,27 @@ export function useCalculatedColumns<R, SR>({
     colOverscanEndIdx,
     templateColumns,
     layoutCssVars,
-    columnMetrics,
+    headerRowsCount,
     lastFrozenColumnIndex,
-    totalFrozenColumnWidth,
-    groupBy
+    totalFrozenColumnWidth
   };
+}
+
+function updateColumnParent<R, SR>(
+  column: MutableCalculatedColumn<R, SR> | MutableCalculatedColumnParent<R, SR>,
+  index: number,
+  level: number
+) {
+  if (level < column.level) {
+    column.level = level;
+  }
+
+  if (column.parent !== undefined) {
+    const { parent } = column;
+    if (parent.idx === -1) {
+      parent.idx = index;
+    }
+    parent.colSpan += 1;
+    updateColumnParent(parent, index, level - 1);
+  }
 }

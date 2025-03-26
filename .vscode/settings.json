@@ -1,11 +1,12 @@
 {
   "editor.codeActionsOnSave": {
-    "source.fixAll": true
+    "source.fixAll": "explicit"
   },
   "editor.defaultFormatter": "esbenp.prettier-vscode",
   "editor.formatOnSave": true,
-  "[javascript]": {
-    "editor.defaultFormatter": "rome.rome"
+  "[javascript][json][jsonc][css]": {
+    "editor.defaultFormatter": "biomejs.biome"
   },
+  "typescript.enablePromptUseWorkspaceTsdk": true,
   "typescript.tsdk": "node_modules/typescript/lib"
 }

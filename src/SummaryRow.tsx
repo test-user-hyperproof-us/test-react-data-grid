@@ -1,32 +1,35 @@
 import { memo } from 'react';
-import clsx from 'clsx';
 import { css } from '@linaria/core';
+import clsx from 'clsx';
 
-import { cell, cellFrozen, rowClassname, rowSelectedClassname } from './style';
 import { getColSpan, getRowStyle } from './utils';
+import type { RenderRowProps } from './types';
+import { cell, cellFrozen } from './style/cell';
+import {
+  bottomSummaryRowClassname,
+  rowClassname,
+  rowSelectedClassname,
+  topSummaryRowClassname
+} from './style/row';
 import SummaryCell from './SummaryCell';
-import type { CalculatedColumn, RowRendererProps } from './types';
 
-type SharedRowRendererProps<R, SR> = Pick<
-  RowRendererProps<R, SR>,
-  'viewportColumns' | 'rowIdx' | 'gridRowStart'
+type SharedRenderRowProps<R, SR> = Pick<
+  RenderRowProps<R, SR>,
+  'viewportColumns' | 'rowIdx' | 'gridRowStart' | 'selectCell'
 >;
 
-interface SummaryRowProps<R, SR> extends SharedRowRendererProps<R, SR> {
+interface SummaryRowProps<R, SR> extends SharedRenderRowProps<R, SR> {
   'aria-rowindex': number;
   row: SR;
   top: number | undefined;
   bottom: number | undefined;
   lastFrozenColumnIndex: number;
   selectedCellIdx: number | undefined;
-  lastTopRowIdx: number | undefined;
-  selectCell: (row: SR, column: CalculatedColumn<R, SR>) => void;
+  isTop: boolean;
 }
 
 const summaryRow = css`
   @layer rdg.SummaryRow {
-    line-height: var(--rdg-summary-row-height);
-
     > .${cell} {
       position: sticky;
     }
@@ -36,34 +39,16 @@ const summaryRow = css`
 const topSummaryRow = css`
   @layer rdg.SummaryRow {
     > .${cell} {
-      z-index: 1;
+      z-index: 2;
     }
 
     > .${cellFrozen} {
-      z-index: 2;
-    }
-  }
-`;
-
-const topSummaryRowBorderClassname = css`
-  @layer rdg.SummaryRow {
-    > .${cell} {
-      border-block-end: 2px solid var(--rdg-summary-border-color);
-    }
-  }
-`;
-
-const bottomSummaryRowBorderClassname = css`
-  @layer rdg.SummaryRow {
-    > .${cell} {
-      border-block-start: 2px solid var(--rdg-summary-border-color);
+      z-index: 3;
     }
   }
 `;
 
 const summaryRowClassname = `rdg-summary-row ${summaryRow}`;
-
-const topSummaryRowClassname = `rdg-top-summary-row ${topSummaryRow}`;
 
 function SummaryRow<R, SR>({
   rowIdx,
@@ -74,7 +59,7 @@ function SummaryRow<R, SR>({
   bottom,
   lastFrozenColumnIndex,
   selectedCellIdx,
-  lastTopRowIdx,
+  isTop,
   selectCell,
   'aria-rowindex': ariaRowIndex
 }: SummaryRowProps<R, SR>) {
@@ -94,13 +79,12 @@ function SummaryRow<R, SR>({
         column={column}
         colSpan={colSpan}
         row={row}
+        rowIdx={rowIdx}
         isCellSelected={isCellSelected}
         selectCell={selectCell}
       />
     );
   }
-
-  const isTop = lastTopRowIdx !== undefined;
 
   return (
     <div
@@ -112,10 +96,8 @@ function SummaryRow<R, SR>({
         summaryRowClassname,
         {
           [rowSelectedClassname]: selectedCellIdx === -1,
-          [topSummaryRowClassname]: isTop,
-          [topSummaryRowBorderClassname]: isTop && lastTopRowIdx === rowIdx,
-          [bottomSummaryRowBorderClassname]: !isTop && rowIdx === 0,
-          'rdg-bottom-summary-row': !isTop
+          [`${topSummaryRowClassname} ${topSummaryRow}`]: isTop,
+          [bottomSummaryRowClassname]: !isTop
         }
       )}
       style={
@@ -131,4 +113,4 @@ function SummaryRow<R, SR>({
   );
 }
 
-export default memo(SummaryRow) as <R, SR>(props: SummaryRowProps<R, SR>) => JSX.Element;
+export default memo(SummaryRow) as <R, SR>(props: SummaryRowProps<R, SR>) => React.JSX.Element;

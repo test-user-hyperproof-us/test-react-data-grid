@@ -1,31 +1,14 @@
-import { memo } from 'react';
-import clsx from 'clsx';
+import { memo, useMemo } from 'react';
 import { css } from '@linaria/core';
+import clsx from 'clsx';
 
-import { cell, cellFrozenLast, rowClassname, rowSelectedClassname } from './style';
+import { RowSelectionContext, type RowSelectionContextValue } from './hooks';
+import { getRowStyle } from './utils';
+import type { BaseRenderRowProps, GroupRow } from './types';
 import { SELECT_COLUMN_KEY } from './Columns';
 import GroupCell from './GroupCell';
-import type { CalculatedColumn, GroupRow, Omit } from './types';
-import { RowSelectionProvider } from './hooks';
-import { getRowStyle } from './utils';
-
-export interface GroupRowRendererProps<R, SR>
-  extends Omit<React.HTMLAttributes<HTMLDivElement>, 'style' | 'children'> {
-  id: string;
-  groupKey: unknown;
-  viewportColumns: readonly CalculatedColumn<R, SR>[];
-  childRows: readonly R[];
-  rowIdx: number;
-  row: GroupRow<R>;
-  gridRowStart: number;
-  height: number;
-  level: number;
-  selectedCellIdx: number | undefined;
-  isExpanded: boolean;
-  isRowSelected: boolean;
-  selectGroup: (rowIdx: number) => void;
-  toggleGroup: (expandedGroupId: unknown) => void;
-}
+import { cell, cellFrozen } from './style/cell';
+import { rowClassname, rowSelectedClassname } from './style/row';
 
 const groupRow = css`
   @layer rdg.GroupedRow {
@@ -33,7 +16,8 @@ const groupRow = css`
       background-color: var(--rdg-header-background-color);
     }
 
-    > .${cell}:not(:last-child):not(.${cellFrozenLast}) {
+    > .${cell}:not(:last-child, .${cellFrozen}),
+    > :nth-last-child(n + 2 of .${cellFrozen}) {
       border-inline-end: none;
     }
   }
@@ -41,65 +25,77 @@ const groupRow = css`
 
 const groupRowClassname = `rdg-group-row ${groupRow}`;
 
+interface GroupRowRendererProps<R, SR> extends BaseRenderRowProps<R, SR> {
+  row: GroupRow<R>;
+  groupBy: readonly string[];
+  toggleGroup: (expandedGroupId: unknown) => void;
+}
+
 function GroupedRow<R, SR>({
-  id,
-  groupKey,
-  viewportColumns,
-  childRows,
-  rowIdx,
+  className,
   row,
-  gridRowStart,
-  height,
-  level,
-  isExpanded,
+  rowIdx,
+  viewportColumns,
   selectedCellIdx,
   isRowSelected,
-  selectGroup,
+  selectCell,
+  gridRowStart,
+  groupBy,
   toggleGroup,
+  isRowSelectionDisabled,
   ...props
 }: GroupRowRendererProps<R, SR>) {
   // Select is always the first column
-  const idx = viewportColumns[0].key === SELECT_COLUMN_KEY ? level + 1 : level;
+  const idx = viewportColumns[0].key === SELECT_COLUMN_KEY ? row.level + 1 : row.level;
 
   function handleSelectGroup() {
-    selectGroup(rowIdx);
+    selectCell({ rowIdx, idx: -1 });
   }
 
+  const selectionValue = useMemo(
+    (): RowSelectionContextValue => ({ isRowSelectionDisabled: false, isRowSelected }),
+    [isRowSelected]
+  );
+
   return (
-    <RowSelectionProvider value={isRowSelected}>
+    <RowSelectionContext value={selectionValue}>
       <div
         role="row"
-        aria-level={level}
-        aria-expanded={isExpanded}
+        aria-level={row.level + 1} // aria-level is 1-based
+        aria-setsize={row.setSize}
+        aria-posinset={row.posInSet + 1} // aria-posinset is 1-based
+        aria-expanded={row.isExpanded}
         className={clsx(
           rowClassname,
           groupRowClassname,
           `rdg-row-${rowIdx % 2 === 0 ? 'even' : 'odd'}`,
-          {
-            [rowSelectedClassname]: selectedCellIdx === -1
-          }
+          selectedCellIdx === -1 && rowSelectedClassname,
+          className
         )}
         onClick={handleSelectGroup}
-        style={getRowStyle(gridRowStart, height)}
+        style={getRowStyle(gridRowStart)}
         {...props}
       >
         {viewportColumns.map((column) => (
           <GroupCell
             key={column.key}
-            id={id}
-            groupKey={groupKey}
-            childRows={childRows}
-            isExpanded={isExpanded}
+            id={row.id}
+            groupKey={row.groupKey}
+            childRows={row.childRows}
+            isExpanded={row.isExpanded}
             isCellSelected={selectedCellIdx === column.idx}
             column={column}
             row={row}
             groupColumnIndex={idx}
             toggleGroup={toggleGroup}
+            isGroupByColumn={groupBy.includes(column.key)}
           />
         ))}
       </div>
-    </RowSelectionProvider>
+    </RowSelectionContext>
   );
 }
 
-export default memo(GroupedRow) as <R, SR>(props: GroupRowRendererProps<R, SR>) => JSX.Element;
+export default memo(GroupedRow) as <R, SR>(
+  props: GroupRowRendererProps<R, SR>
+) => React.JSX.Element;

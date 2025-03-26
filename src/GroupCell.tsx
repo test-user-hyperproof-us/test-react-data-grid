@@ -1,20 +1,20 @@
 import { memo } from 'react';
 
-import { getCellStyle, getCellClassname } from './utils';
+import { useRovingTabIndex } from './hooks';
+import { getCellClassname, getCellStyle } from './utils';
 import type { CalculatedColumn, GroupRow } from './types';
-import type { GroupRowRendererProps } from './GroupRow';
-import { useRovingCellRef } from './hooks';
 
-type SharedGroupRowRendererProps<R, SR> = Pick<
-  GroupRowRendererProps<R, SR>,
-  'id' | 'groupKey' | 'childRows' | 'isExpanded' | 'toggleGroup'
->;
-
-interface GroupCellProps<R, SR> extends SharedGroupRowRendererProps<R, SR> {
+interface GroupCellProps<R, SR> {
+  id: string;
+  groupKey: unknown;
+  childRows: readonly R[];
+  toggleGroup: (expandedGroupId: unknown) => void;
+  isExpanded: boolean;
   column: CalculatedColumn<R, SR>;
   row: GroupRow<R>;
   isCellSelected: boolean;
   groupColumnIndex: number;
+  isGroupByColumn: boolean;
 }
 
 function GroupCell<R, SR>({
@@ -26,23 +26,23 @@ function GroupCell<R, SR>({
   column,
   row,
   groupColumnIndex,
+  isGroupByColumn,
   toggleGroup: toggleGroupWrapper
 }: GroupCellProps<R, SR>) {
-  const { ref, tabIndex, onFocus } = useRovingCellRef(isCellSelected);
+  const { tabIndex, childTabIndex, onFocus } = useRovingTabIndex(isCellSelected);
 
   function toggleGroup() {
     toggleGroupWrapper(id);
   }
 
   // Only make the cell clickable if the group level matches
-  const isLevelMatching = column.rowGroup && groupColumnIndex === column.idx;
+  const isLevelMatching = isGroupByColumn && groupColumnIndex === column.idx;
 
   return (
     <div
       role="gridcell"
       aria-colindex={column.idx + 1}
       aria-selected={isCellSelected}
-      ref={ref}
       tabIndex={tabIndex}
       key={column.key}
       className={getCellClassname(column)}
@@ -53,18 +53,18 @@ function GroupCell<R, SR>({
       onClick={isLevelMatching ? toggleGroup : undefined}
       onFocus={onFocus}
     >
-      {(!column.rowGroup || groupColumnIndex === column.idx) &&
-        column.groupFormatter?.({
+      {(!isGroupByColumn || isLevelMatching) &&
+        column.renderGroupCell?.({
           groupKey,
           childRows,
           column,
           row,
           isExpanded,
-          isCellSelected,
+          tabIndex: childTabIndex,
           toggleGroup
         })}
     </div>
   );
 }
 
-export default memo(GroupCell) as <R, SR>(props: GroupCellProps<R, SR>) => JSX.Element;
+export default memo(GroupCell) as <R, SR>(props: GroupCellProps<R, SR>) => React.JSX.Element;

@@ -1,70 +1,79 @@
-import type { CalculatedColumn, Position, GroupRow, CellNavigationMode, Maybe } from '../types';
+import type {
+  CalculatedColumn,
+  CalculatedColumnParent,
+  CellNavigationMode,
+  Maybe,
+  Position
+} from '../types';
 import { getColSpan } from './colSpanUtils';
 
 interface IsSelectedCellEditableOpts<R, SR> {
   selectedPosition: Position;
   columns: readonly CalculatedColumn<R, SR>[];
-  rows: readonly (R | GroupRow<R>)[];
-  isGroupRow: (row: R | GroupRow<R>) => row is GroupRow<R>;
+  rows: readonly R[];
 }
 
 export function isSelectedCellEditable<R, SR>({
   selectedPosition,
   columns,
-  rows,
-  isGroupRow
+  rows
 }: IsSelectedCellEditableOpts<R, SR>): boolean {
   const column = columns[selectedPosition.idx];
   const row = rows[selectedPosition.rowIdx];
-  return !isGroupRow(row) && isCellEditable(column, row);
+  return isCellEditableUtil(column, row);
 }
 
-export function isCellEditable<R, SR>(column: CalculatedColumn<R, SR>, row: R): boolean {
+// https://github.com/vercel/next.js/issues/56480
+export function isCellEditableUtil<R, SR>(column: CalculatedColumn<R, SR>, row: R): boolean {
   return (
-    column.editor != null &&
-    !column.rowGroup &&
+    column.renderEditCell != null &&
     (typeof column.editable === 'function' ? column.editable(row) : column.editable) !== false
   );
 }
 
 interface GetNextSelectedCellPositionOpts<R, SR> {
+  moveUp: boolean;
+  moveNext: boolean;
   cellNavigationMode: CellNavigationMode;
   columns: readonly CalculatedColumn<R, SR>[];
   colSpanColumns: readonly CalculatedColumn<R, SR>[];
-  rows: readonly (R | GroupRow<R>)[];
+  rows: readonly R[];
   topSummaryRows: Maybe<readonly SR[]>;
   bottomSummaryRows: Maybe<readonly SR[]>;
   minRowIdx: number;
+  mainHeaderRowIdx: number;
   maxRowIdx: number;
   currentPosition: Position;
   nextPosition: Position;
   lastFrozenColumnIndex: number;
   isCellWithinBounds: (position: Position) => boolean;
-  isGroupRow: (row: R | GroupRow<R>) => row is GroupRow<R>;
 }
 
-export function getSelectedCellColSpan<R, SR>({
+function getSelectedCellColSpan<R, SR>({
   rows,
   topSummaryRows,
   bottomSummaryRows,
   rowIdx,
+  mainHeaderRowIdx,
   lastFrozenColumnIndex,
-  column,
-  isGroupRow
+  column
 }: Pick<
   GetNextSelectedCellPositionOpts<R, SR>,
-  'rows' | 'topSummaryRows' | 'bottomSummaryRows' | 'isGroupRow' | 'lastFrozenColumnIndex'
+  'rows' | 'topSummaryRows' | 'bottomSummaryRows' | 'lastFrozenColumnIndex' | 'mainHeaderRowIdx'
 > & {
   rowIdx: number;
   column: CalculatedColumn<R, SR>;
 }) {
   const topSummaryRowsCount = topSummaryRows?.length ?? 0;
-  const minRowIdx = -1 - topSummaryRowsCount;
-  if (rowIdx === minRowIdx) {
+  if (rowIdx === mainHeaderRowIdx) {
     return getColSpan(column, lastFrozenColumnIndex, { type: 'HEADER' });
   }
 
-  if (topSummaryRows && rowIdx > minRowIdx && rowIdx <= topSummaryRowsCount + minRowIdx) {
+  if (
+    topSummaryRows &&
+    rowIdx > mainHeaderRowIdx &&
+    rowIdx <= topSummaryRowsCount + mainHeaderRowIdx
+  ) {
     return getColSpan(column, lastFrozenColumnIndex, {
       type: 'SUMMARY',
       row: topSummaryRows[rowIdx + topSummaryRowsCount]
@@ -73,10 +82,7 @@ export function getSelectedCellColSpan<R, SR>({
 
   if (rowIdx >= 0 && rowIdx < rows.length) {
     const row = rows[rowIdx];
-    if (!isGroupRow(row)) {
-      return getColSpan(column, lastFrozenColumnIndex, { type: 'ROW', row });
-    }
-    return undefined;
+    return getColSpan(column, lastFrozenColumnIndex, { type: 'ROW', row });
   }
 
   if (bottomSummaryRows) {
@@ -90,6 +96,8 @@ export function getSelectedCellColSpan<R, SR>({
 }
 
 export function getNextSelectedCellPosition<R, SR>({
+  moveUp,
+  moveNext,
   cellNavigationMode,
   columns,
   colSpanColumns,
@@ -97,20 +105,17 @@ export function getNextSelectedCellPosition<R, SR>({
   topSummaryRows,
   bottomSummaryRows,
   minRowIdx,
+  mainHeaderRowIdx,
   maxRowIdx,
-  currentPosition: { idx: currentIdx },
+  currentPosition: { idx: currentIdx, rowIdx: currentRowIdx },
   nextPosition,
   lastFrozenColumnIndex,
-  isCellWithinBounds,
-  isGroupRow
+  isCellWithinBounds
 }: GetNextSelectedCellPositionOpts<R, SR>): Position {
   let { idx: nextIdx, rowIdx: nextRowIdx } = nextPosition;
+  const columnsCount = columns.length;
 
-  const setColSpan = (moveRight: boolean) => {
-    if (nextRowIdx >= 0 && nextRowIdx < rows.length) {
-      const row = rows[nextRowIdx];
-      if (isGroupRow(row)) return;
-    }
+  const setColSpan = (moveNext: boolean) => {
     // If a cell within the colspan range is selected then move to the
     // previous or the next cell depending on the navigation direction
     for (const column of colSpanColumns) {
@@ -121,48 +126,102 @@ export function getNextSelectedCellPosition<R, SR>({
         topSummaryRows,
         bottomSummaryRows,
         rowIdx: nextRowIdx,
+        mainHeaderRowIdx,
         lastFrozenColumnIndex,
-        column,
-        isGroupRow
+        column
       });
 
       if (colSpan && nextIdx > colIdx && nextIdx < colSpan + colIdx) {
-        nextIdx = colIdx + (moveRight ? colSpan : 0);
+        nextIdx = colIdx + (moveNext ? colSpan : 0);
         break;
       }
     }
   };
 
+  const getParentRowIdx = (parent: CalculatedColumnParent<R, SR>) => {
+    return parent.level + mainHeaderRowIdx;
+  };
+
+  const setHeaderGroupColAndRowSpan = () => {
+    if (moveNext) {
+      // find the parent at the same row level
+      const nextColumn = columns[nextIdx];
+      let parent = nextColumn.parent;
+      while (parent !== undefined) {
+        const parentRowIdx = getParentRowIdx(parent);
+        if (nextRowIdx === parentRowIdx) {
+          nextIdx = parent.idx + parent.colSpan;
+          break;
+        }
+        parent = parent.parent;
+      }
+    } else if (moveUp) {
+      // find the first reachable parent
+      const nextColumn = columns[nextIdx];
+      let parent = nextColumn.parent;
+      let found = false;
+      while (parent !== undefined) {
+        const parentRowIdx = getParentRowIdx(parent);
+        if (nextRowIdx >= parentRowIdx) {
+          nextIdx = parent.idx;
+          nextRowIdx = parentRowIdx;
+          found = true;
+          break;
+        }
+        parent = parent.parent;
+      }
+
+      // keep the current position if there is no parent matching the new row position
+      if (!found) {
+        nextIdx = currentIdx;
+        nextRowIdx = currentRowIdx;
+      }
+    }
+  };
+
   if (isCellWithinBounds(nextPosition)) {
-    setColSpan(nextIdx - currentIdx > 0);
+    setColSpan(moveNext);
+
+    if (nextRowIdx < mainHeaderRowIdx) {
+      setHeaderGroupColAndRowSpan();
+    }
   }
 
-  if (cellNavigationMode !== 'NONE') {
-    const columnsCount = columns.length;
+  if (cellNavigationMode === 'CHANGE_ROW') {
     const isAfterLastColumn = nextIdx === columnsCount;
     const isBeforeFirstColumn = nextIdx === -1;
 
     if (isAfterLastColumn) {
-      if (cellNavigationMode === 'CHANGE_ROW') {
-        const isLastRow = nextRowIdx === maxRowIdx;
-        if (!isLastRow) {
-          nextIdx = 0;
-          nextRowIdx += 1;
-        }
-      } else {
+      const isLastRow = nextRowIdx === maxRowIdx;
+      if (!isLastRow) {
         nextIdx = 0;
+        nextRowIdx += 1;
       }
     } else if (isBeforeFirstColumn) {
-      if (cellNavigationMode === 'CHANGE_ROW') {
-        const isFirstRow = nextRowIdx === minRowIdx;
-        if (!isFirstRow) {
-          nextRowIdx -= 1;
-          nextIdx = columnsCount - 1;
-        }
-      } else {
+      const isFirstRow = nextRowIdx === minRowIdx;
+      if (!isFirstRow) {
+        nextRowIdx -= 1;
         nextIdx = columnsCount - 1;
       }
       setColSpan(false);
+    }
+  }
+
+  if (nextRowIdx < mainHeaderRowIdx) {
+    // Find the last reachable parent for the new rowIdx
+    // This check is needed when navigating to a column
+    // that does not have a parent matching the new rowIdx
+    const nextColumn = columns[nextIdx];
+    let parent = nextColumn.parent;
+    const nextParentRowIdx = nextRowIdx;
+    nextRowIdx = mainHeaderRowIdx;
+    while (parent !== undefined) {
+      const parentRowIdx = getParentRowIdx(parent);
+      if (parentRowIdx >= nextParentRowIdx) {
+        nextRowIdx = parentRowIdx;
+        nextIdx = parent.idx;
+      }
+      parent = parent.parent;
     }
   }
 
@@ -170,7 +229,6 @@ export function getNextSelectedCellPosition<R, SR>({
 }
 
 interface CanExitGridOpts {
-  cellNavigationMode: CellNavigationMode;
   maxColIdx: number;
   minRowIdx: number;
   maxRowIdx: number;
@@ -179,23 +237,17 @@ interface CanExitGridOpts {
 }
 
 export function canExitGrid({
-  cellNavigationMode,
   maxColIdx,
   minRowIdx,
   maxRowIdx,
   selectedPosition: { rowIdx, idx },
   shiftKey
 }: CanExitGridOpts): boolean {
-  // When the cellNavigationMode is 'none' or 'changeRow', you can exit the grid if you're at the first or last cell of the grid
-  // When the cellNavigationMode is 'loopOverRow', there is no logical exit point so you can't exit the grid
-  if (cellNavigationMode === 'NONE' || cellNavigationMode === 'CHANGE_ROW') {
-    const atLastCellInRow = idx === maxColIdx;
-    const atFirstCellInRow = idx === 0;
-    const atLastRow = rowIdx === maxRowIdx;
-    const atFirstRow = rowIdx === minRowIdx;
+  // Exit the grid if we're at the first or last cell of the grid
+  const atLastCellInRow = idx === maxColIdx;
+  const atFirstCellInRow = idx === 0;
+  const atLastRow = rowIdx === maxRowIdx;
+  const atFirstRow = rowIdx === minRowIdx;
 
-    return shiftKey ? atFirstCellInRow && atFirstRow : atLastCellInRow && atLastRow;
-  }
-
-  return false;
+  return shiftKey ? atFirstCellInRow && atFirstRow : atLastCellInRow && atLastRow;
 }

@@ -1,7 +1,4 @@
-/coverage
-/dist
-/lib
-/node_modules
-/package-lock.json
 *.js
-*.cjs
+*.json
+*.css
+/website/routeTree.gen.ts

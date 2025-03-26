@@ -1,39 +1,37 @@
-import { memo, forwardRef } from 'react';
-import type { RefAttributes } from 'react';
+import { memo, useMemo } from 'react';
 import clsx from 'clsx';
 
-import Cell from './Cell';
-import { RowSelectionProvider, useLatestFunc } from './hooks';
+import { RowSelectionContext, useLatestFunc, type RowSelectionContextValue } from './hooks';
 import { getColSpan, getRowStyle } from './utils';
-import { rowClassname, rowSelectedClassname } from './style';
-import type { CalculatedColumn, RowRendererProps } from './types';
+import type { CalculatedColumn, RenderRowProps } from './types';
+import { useDefaultRenderers } from './DataGridDefaultRenderersContext';
+import { rowClassname, rowSelectedClassname } from './style/row';
 
-function Row<R, SR>(
-  {
-    className,
-    rowIdx,
-    gridRowStart,
-    height,
-    selectedCellIdx,
-    isRowSelected,
-    copiedCellIdx,
-    draggedOverCellIdx,
-    lastFrozenColumnIndex,
-    row,
-    viewportColumns,
-    selectedCellEditor,
-    selectedCellDragHandle,
-    onRowClick,
-    onRowDoubleClick,
-    rowClass,
-    setDraggedOverRowIdx,
-    onMouseEnter,
-    onRowChange,
-    selectCell,
-    ...props
-  }: RowRendererProps<R, SR>,
-  ref: React.Ref<HTMLDivElement>
-) {
+function Row<R, SR>({
+  className,
+  rowIdx,
+  gridRowStart,
+  selectedCellIdx,
+  isRowSelectionDisabled,
+  isRowSelected,
+  copiedCellIdx,
+  draggedOverCellIdx,
+  lastFrozenColumnIndex,
+  row,
+  viewportColumns,
+  selectedCellEditor,
+  onCellClick,
+  onCellDoubleClick,
+  onCellContextMenu,
+  rowClass,
+  setDraggedOverRowIdx,
+  onMouseEnter,
+  onRowChange,
+  selectCell,
+  ...props
+}: RenderRowProps<R, SR>) {
+  const renderCell = useDefaultRenderers<R, SR>()!.renderCell!;
+
   const handleRowChange = useLatestFunc((column: CalculatedColumn<R, SR>, newRow: R) => {
     onRowChange(column, rowIdx, newRow);
   });
@@ -49,7 +47,7 @@ function Row<R, SR>(
     {
       [rowSelectedClassname]: selectedCellIdx === -1
     },
-    rowClass?.(row),
+    rowClass?.(row, rowIdx),
     className
   );
 
@@ -69,46 +67,48 @@ function Row<R, SR>(
       cells.push(selectedCellEditor);
     } else {
       cells.push(
-        <Cell
-          key={column.key}
-          column={column}
-          colSpan={colSpan}
-          row={row}
-          isCopied={copiedCellIdx === idx}
-          isDraggedOver={draggedOverCellIdx === idx}
-          isCellSelected={isCellSelected}
-          dragHandle={isCellSelected ? selectedCellDragHandle : undefined}
-          onRowClick={onRowClick}
-          onRowDoubleClick={onRowDoubleClick}
-          onRowChange={handleRowChange}
-          selectCell={selectCell}
-        />
+        renderCell(column.key, {
+          column,
+          colSpan,
+          row,
+          rowIdx,
+          isCopied: copiedCellIdx === idx,
+          isDraggedOver: draggedOverCellIdx === idx,
+          isCellSelected,
+          onClick: onCellClick,
+          onDoubleClick: onCellDoubleClick,
+          onContextMenu: onCellContextMenu,
+          onRowChange: handleRowChange,
+          selectCell
+        })
       );
     }
   }
 
+  const selectionValue = useMemo(
+    (): RowSelectionContextValue => ({ isRowSelected, isRowSelectionDisabled }),
+    [isRowSelectionDisabled, isRowSelected]
+  );
+
   return (
-    <RowSelectionProvider value={isRowSelected}>
+    <RowSelectionContext value={selectionValue}>
       <div
         role="row"
-        ref={ref}
         className={className}
         onMouseEnter={handleDragEnter}
-        style={getRowStyle(gridRowStart, height)}
+        style={getRowStyle(gridRowStart)}
         {...props}
       >
         {cells}
       </div>
-    </RowSelectionProvider>
+    </RowSelectionContext>
   );
 }
 
-const RowComponent = memo(forwardRef(Row)) as <R, SR>(
-  props: RowRendererProps<R, SR> & RefAttributes<HTMLDivElement>
-) => JSX.Element;
+const RowComponent = memo(Row) as <R, SR>(props: RenderRowProps<R, SR>) => React.JSX.Element;
 
 export default RowComponent;
 
-export function defaultRowRenderer<R, SR>(key: React.Key, props: RowRendererProps<R, SR>) {
+export function defaultRenderRow<R, SR>(key: React.Key, props: RenderRowProps<R, SR>) {
   return <RowComponent key={key} {...props} />;
 }
